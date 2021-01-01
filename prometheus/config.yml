@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.rules: |-
+    groups:
+    - name: devopscube demo alert
+      rules:
+      - alert: HighUsage
+        expr: avg(irate(node_cpu_seconds_total{mode="idle"}[1m]) * 100) < 20
+        for: 1m
+        annotations:
+          summary: "High usage on {{ $labels.instance }}"
+          description: "{{ $labels.instance }} has a average CPU idle (current value: {{ $value }}s)"
+      - alert: KubePodNotReady
+        annotations:
+          description: Pod {{ $labels.namespace }}/{{ $labels.pod }} has been in a non-ready state for longer than 15 minutes.
+          runbook_url: https://github.com/prometheus-operator/kube-prometheus/wiki/kubepodnotready
+          summary: Pod has been in a non-ready state for more than 1 minute.
+        expr: |
+          sum by (namespace, pod) (
+            max by(namespace, pod) (
+              kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Unknown"}
+            ) * on(namespace, pod) group_left(owner_kind) topk by(namespace, pod) (
+              1, max by(namespace, pod, owner_kind) (kube_pod_owner{owner_kind!="Job"})
+            )
+          ) > 0
+        for: 1m
+  prometheus.yml: |-
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    rule_files:
+      - /etc/prometheus/prometheus.rules
+    alerting:
+      alertmanagers:
+      - scheme: http
+        static_configs:
+        - targets: ['alertmanager-service.default.svc.cluster.local:9093']
+
+    scrape_configs:
+      - job_name: 'kube-state-metrics'
+        static_configs:
+          - targets: ['kube-state-metrics.kube-system.svc.cluster.local:8080']
+      - job_name: 'node-exporter'
+        static_configs:
+          - targets: ['node-exporter.default.svc.cluster.local:9100']
